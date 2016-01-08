@@ -1,0 +1,196 @@
+<h1>How to improve Koha speed?</h1>
+
+<p>These tests have been generated on a master branch (01d48a78258f98f693a8f48d7294a6ae880d5fc4)</p>
+
+<p>And patches from <a href="http://bugs.koha-community.org/bugzilla3/show_bug.cgi?id=15294">bug 15294</a> and <a href="http://bugs.koha-community.org/bugzilla3/show_bug.cgi?id=15295">bug 15295</a> to have the Koha::Librar[y|ies] modules.</p>
+
+<p>Using the <a href="https://github.com/digibib/kohadevbox/tree/ansible">ansible branch</a> of kohadevbox, I have added the following to the file <code>/etc/koha/sites/kohadev/plack.psgi</code> to profile the script executed:</p>
+
+<pre><code>enable 'Debug',  panels =&gt; [
+        qw(Environment Response Timer Memory),
+        [ 'Profiler::NYTProf', exclude =&gt; [qw(.*\.css .*\.png .*\.ico .*\.js .*\.gif .*404\.pl .*nytprof/nytprofhtml.*)] ],
+];
+</code></pre>
+
+<p>Then</p>
+
+<pre><code>sudo koha-plack --enable kohadev
+sudo koha-plack --start kohadev
+sudo service apache2 restart
+</code></pre>
+
+<p>Important note: Between each step koha-plack has been restarted!</p>
+
+<h2>Koha::Objects, an overhead?</h2>
+
+<h3>Fetch 3 libraries</h3>
+
+<p>The following script will only fetch 3 library names:</p>
+
+<pre><code>#!/usr/bin/perl
+
+use Modern::Perl;
+use CGI;
+use Koha::Libraries;
+for my $l (qw(CPL MPL IPT )) {
+    Koha::Libraries-&gt;find($l)-&gt;branchname;
+}
+
+my $query = CGI-&gt;new;
+print $query-&gt;header({
+    type =&gt; 'text/html',
+    status =&gt; '200 OK',
+    charset =&gt; 'UTF-8',
+    Pragma =&gt; 'no-cache',
+});
+print "&lt;html&gt;&lt;body&gt;Hello&lt;/body&gt;&lt;/html&gt;";
+</code></pre>
+
+<p>The <a href="nytprofhtml.18554/index.html">profile</a> shows that the big part of the time is spent to load the DBIx::Schema.</p>
+
+<h3>Fetch a lot of libraries</h3>
+
+<p>The following script will fetch 3x 1000 libraries</p>
+
+<pre><code>#!/usr/bin/perl
+
+use Modern::Perl;
+use CGI;
+use Koha::Libraries;
+for ( 1 .. 1000 ) {
+    for my $l (qw(CPL MPL IPT )) {
+        Koha::Libraries-&gt;find($l)-&gt;branchname;
+    }
+}
+
+my $query = CGI-&gt;new;
+print $query-&gt;header({
+    type =&gt; 'text/html',
+    status =&gt; '200 OK',
+    charset =&gt; 'UTF-8',
+    Pragma =&gt; 'no-cache',
+});
+print "&lt;html&gt;&lt;body&gt;Hello&lt;/body&gt;&lt;/html&gt;";
+</code></pre>
+
+<p>The <a href="nytprofhtml.19366/index.html">profile</a> highlights that the time spent to load the schema is always the same (1.3s).</p>
+
+<p>But a lot of time is spent fetching the same result, is it normal (TODO).</p>
+
+<h3>Fetching a lot of libraries, without Koha::Objects</h3>
+
+<p>Is there an issue in Koha::Objects here?</p>
+
+<p>The following script does the same as before, but without using the Koha::Libraries module.</p>
+
+<pre><code>#!/usr/bin/perl
+
+use Modern::Perl;
+use CGI;
+use Koha::Database;
+for ( 1 .. 1000 ) {
+    for my $l (qw(CPL MPL IPT )) {
+        Koha::Database-&gt;new-&gt;schema-&gt;resultset('Branch')-&gt;find($l)-&gt;branchname;
+    }
+}
+
+my $query = CGI-&gt;new;
+print $query-&gt;header({
+    type =&gt; 'text/html',
+    status =&gt; '200 OK',
+    charset =&gt; 'UTF-8',
+    Pragma =&gt; 'no-cache',
+});
+print "&lt;html&gt;&lt;body&gt;Hello&lt;/body&gt;&lt;/html&gt;";
+</code></pre>
+
+<p>The <a href="nytprofhtml.19609">profile</a> proves that the Koha::Objects does not add a big overhead here.</p>
+
+<p>At least for -&gt;find.</p>
+
+<h3>What about the -&gt;search method?</h3>
+
+<h4>With Koha::Libraries (and so Koha::Objects)</h4>
+
+<p>The following code will search for all libraries in the database (12) 1000 times and fetch the branchname one by one.</p>
+
+<pre><code>#!/usr/bin/perl
+
+use Modern::Perl;
+use CGI;
+use Koha::Libraries;
+for ( 1 .. 1000 ) {
+    my $libraries = Koha::Libraries-&gt;search;
+    while ( my $l = $libraries-&gt;next ) {
+        $l-&gt;branchname;
+    }
+}
+
+my $query = CGI-&gt;new;
+print $query-&gt;header({
+    type =&gt; 'text/html',
+    status =&gt; '200 OK',
+    charset =&gt; 'UTF-8',
+    Pragma =&gt; 'no-cache',
+});
+print "&lt;html&gt;&lt;body&gt;Hello&lt;/body&gt;&lt;/html&gt;";
+</code></pre>
+
+<p>The <a href="nytprofhtml.20066">profile</a>.</p>
+
+<h4>Without Koha::Objects</h4>
+
+<pre><code>#!/usr/bin/perl
+
+use Modern::Perl;
+use CGI;
+use Koha::Database;
+for ( 1 .. 1000 ) {
+    my $libraries = Koha::Database-&gt;new-&gt;schema-&gt;resultset('Branch')-&gt;search;
+    while ( my $l = $libraries-&gt;next ) {
+        $l-&gt;branchname;
+    }
+}
+
+my $query = CGI-&gt;new;
+print $query-&gt;header({
+    type =&gt; 'text/html',
+    status =&gt; '200 OK',
+    charset =&gt; 'UTF-8',
+    Pragma =&gt; 'no-cache',
+});
+print "&lt;html&gt;&lt;body&gt;Hello&lt;/body&gt;&lt;/html&gt;";
+</code></pre>
+
+<p>Once again the <a href="nytprofhtml.19928">profile</a> shows us that Koha::Objects does not introduce a big overhead here.</p>
+
+<h3>But... Is there something magic?</h3>
+
+<p>And what happens if I profile twice the same script without restarting plack?</p>
+
+<p>You know, the real life.</p>
+
+<p>Tested with one of the previous script (not sure which one...)</p>
+
+<p>The profiles are completely different: <a href="nytprofhtml.20401">The first call</a> has the same graph as the previous ones.</p>
+
+<p>But the <a href="nytprofhtml.20401_2">second one</a> is completely different and yes, here is the magic of plack! :)</p>
+
+<h3>The real real life</h3>
+
+<p>Ok but there is no point to call 3x 1000 times the same library names, so let's try with the main page:</p>
+
+<p>Here we are, the <a href="nytprofhtml.21326_1">first profile</a> confirm that the first call will load the schema and not the others.</p>
+
+<p>Indeed, in the <a href="nytprofhtml.21326_2">second profile</a>, the DBIx::Class:Schema::load_namespaces is lost somehwere when it tooks 70% of the time in the first call.</p>
+
+<p>However, there is now 60% spent in get<em>template</em>and_user, then 30% fetching syspref (???).</p>
+
+<p>For a total of 315 fetches:</p>
+
+<pre><code># spent 777ms (10.5+767) within DBIx::Class::ResultSet::single which was called 315 times, avg 2.47ms/call: # 315 times (10.5ms+767ms) by C4::Context::preference or C4::Languages::getTranslatedLanguages or C4::Languages::getlanguage or C4::NewsChannels::GetNewsToDisplay at line 910, avg 2.47ms/call
+</code></pre>
+
+<p>I have a patch in the pipe, see <a href="http://bugs.koha-community.org/bugzilla3/show_bug.cgi?id=15341">bug 15341</a>, so let's apply it.</p>
+
+<p><a href="nytprofhtml.23030">The profile is here</a></p>

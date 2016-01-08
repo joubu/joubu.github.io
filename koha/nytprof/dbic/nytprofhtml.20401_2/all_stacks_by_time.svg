@@ -1,0 +1,620 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="194" onload="init(evt)" viewBox="0 0 1200 194" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, svg;
+	function init(evt) { 
+		details = document.getElementById("details").firstChild; 
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(info) { details.nodeValue = "sub " + info; }
+	function c() { details.nodeValue = ' '; }
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+		
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+		
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+		
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) { 
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+		
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) { 
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+		
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+		
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+		
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+		
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}	
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++){
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			var searchbtn = document.getElementById("search");
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		for (var i=0; i < el.length; i++){
+			var e = el[i];
+			if (e.attributes["class"].value == "func_g") {
+				// Scrape the function name from the onmouseover
+				// callback text. This is a little dirty.
+				var func = e.attributes["onmouseover"].value;
+				if (func != null) {
+					func = func.substr(3);
+					func = func.replace(/ .*/, "");
+					var r = find_child(e, "rect");
+					if (r == null) {
+						// the rect might be wrapped in an anchor
+						// if nameattr href is being used
+						if (r = find_child(e, "a")) {
+						    r = find_child(r, "rect");
+						}
+					}
+				}
+				if (func != null && r != null &&
+				    func.match(re)) {
+					orig_save(r, "fill");
+					r.attributes["fill"].value =
+					    "rgb(230,0,230)";
+					searching = 1;
+				}
+			}
+		}
+		if (searching) {
+			var searchbtn = document.getElementById("search");
+			searchbtn.style["opacity"] = "1.0";
+			searchbtn.firstChild.nodeValue = "Reset Search"
+		}
+	}
+	function searchover(e) {
+		var searchbtn = document.getElementById("search");
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		var searchbtn = document.getElementById("search");
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="194.0" fill="url(#background)"  />
+<text text-anchor="middle" x="600.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >Flame Graph</text>
+<text text-anchor="" x="10.00" y="177" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="1090.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<g class="func_g" onmouseover="s('Class::Accessor::Grouped::get_inherited (24 microseconds, 1.98%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::Accessor::Grouped::get_inherited (24 microseconds, 1.98%)</title><a xlink:href="Class-Accessor-Grouped-pm-47-line.html#362" target="_top"><rect x="928.1" y="81" width="23.4" height="15.0" fill="rgb(247,125,46)" rx="2" ry="2" />
+<text text-anchor="" x="931.07" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >C..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::Schema::default_resultset_attributes (67 microseconds, 5.53%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::Schema::default_resultset_attributes (67 microseconds, 5.53%)</title><a xlink:href="(eval 167)[Class-Accessor-Grouped-pm-764]-53-line.html#1" target="_top"><rect x="833.5" y="81" width="65.3" height="15.0" fill="rgb(238,162,36)" rx="2" ry="2" />
+<text text-anchor="" x="836.46" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBIx::C..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::AccessorGroup::get_component_class (24 microseconds, 1.98%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::AccessorGroup::get_component_class (24 microseconds, 1.98%)</title><a xlink:href="DBIx-Class-AccessorGroup-pm-46-line.html#12" target="_top"><rect x="752.8" y="81" width="23.1" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="755.77" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >D..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSource::schema (5 microseconds, 0.41%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSource::schema (5 microseconds, 0.41%)</title><a xlink:href="DBIx-Class-ResultSource-pm-87-line.html#1218" target="_top"><rect x="828.2" y="81" width="5.3" height="15.0" fill="rgb(228,162,25)" rx="2" ry="2" />
+<text text-anchor="" x="831.20" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::CORE:substcont (4 microseconds, 0.33%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::CORE:substcont (4 microseconds, 0.33%)</title><a xlink:href="(eval 1112)[CGI-pm-932]-1222-line.html#CGI__CORE_substcont" target="_top"><rect x="164.6" y="113" width="3.5" height="15.0" fill="rgb(242,145,41)" rx="2" ry="2" />
+<text text-anchor="" x="167.57" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::blessed (0 microseconds, 0.00%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::blessed (0 microseconds, 0.00%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__blessed" target="_top"><rect x="575.1" y="49" width="0.4" height="15.0" fill="rgb(247,202,47)" rx="2" ry="2" />
+<text text-anchor="" x="578.13" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:pack (6 microseconds, 0.49%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:pack (6 microseconds, 0.49%)</title><a xlink:href="plack-pl-9-line.html#CGI__Compile__ROOT__home_vagrant_kohaclone_plack_2epl__CORE_pack" target="_top"><rect x="19.7" y="129" width="5.5" height="15.0" fill="rgb(242,145,40)" rx="2" ry="2" />
+<text text-anchor="" x="22.73" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('SelectSaver::DESTROY (6 microseconds, 0.49%)')" onmouseout="c()" onclick="zoom(this)">
+<title>SelectSaver::DESTROY (6 microseconds, 0.49%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#SelectSaver__DESTROY" target="_top"><rect x="1184.4" y="129" width="5.6" height="15.0" fill="rgb(230,195,27)" rx="2" ry="2" />
+<text text-anchor="" x="1187.35" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::AccessorGroup::get_component_class (13 microseconds, 1.07%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::AccessorGroup::get_component_class (13 microseconds, 1.07%)</title><a xlink:href="DBIx-Class-AccessorGroup-pm-46-line.html#12" target="_top"><rect x="725.5" y="65" width="13.1" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="728.51" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSource::result_class (19 microseconds, 1.57%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSource::result_class (19 microseconds, 1.57%)</title><a xlink:href="(eval 167)[Class-Accessor-Grouped-pm-764]-53-line.html#1" target="_top"><rect x="720.0" y="81" width="18.6" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="722.97" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::get_cache (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::get_cache (1 microseconds, 0.08%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#3126" target="_top"><rect x="522.7" y="97" width="0.9" height="15.0" fill="rgb(245,162,44)" rx="2" ry="2" />
+<text text-anchor="" x="525.67" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::reftype (2 microseconds, 0.16%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::reftype (2 microseconds, 0.16%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__reftype" target="_top"><rect x="897.1" y="49" width="1.7" height="15.0" fill="rgb(250,202,49)" rx="2" ry="2" />
+<text text-anchor="" x="900.12" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::Schema::source_registrations (40 microseconds, 3.30%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::Schema::source_registrations (40 microseconds, 3.30%)</title><a xlink:href="(eval 167)[Class-Accessor-Grouped-pm-764]-53-line.html#1" target="_top"><rect x="912.9" y="97" width="38.6" height="15.0" fill="rgb(244,162,43)" rx="2" ry="2" />
+<text text-anchor="" x="915.89" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBI..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Class::Accessor::Grouped::get_super_paths (20 microseconds, 1.65%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::Accessor::Grouped::get_super_paths (20 microseconds, 1.65%)</title><a xlink:href="Class-Accessor-Grouped-pm-47-line.html#504" target="_top"><rect x="877.9" y="49" width="19.2" height="15.0" fill="rgb(235,125,33)" rx="2" ry="2" />
+<text text-anchor="" x="880.94" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::unescapeHTML (16 microseconds, 1.32%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::unescapeHTML (16 microseconds, 1.32%)</title><a xlink:href="(eval 1111)[CGI-pm-932]-1221-line.html#1" target="_top"><rect x="258.5" y="113" width="15.1" height="15.0" fill="rgb(244,145,43)" rx="2" ry="2" />
+<text text-anchor="" x="261.50" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Class::Accessor::Grouped::get_inherited (55 microseconds, 4.54%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::Accessor::Grouped::get_inherited (55 microseconds, 4.54%)</title><a xlink:href="Class-Accessor-Grouped-pm-47-line.html#362" target="_top"><rect x="844.8" y="65" width="54.0" height="15.0" fill="rgb(247,125,46)" rx="2" ry="2" />
+<text text-anchor="" x="847.85" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Class..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('UNIVERSAL::isa (6 microseconds, 0.49%)')" onmouseout="c()" onclick="zoom(this)">
+<title>UNIVERSAL::isa (6 microseconds, 0.49%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#UNIVERSAL__isa" target="_top"><rect x="738.6" y="81" width="5.9" height="15.0" fill="rgb(231,181,28)" rx="2" ry="2" />
+<text text-anchor="" x="741.56" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::CORE:subst (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::CORE:subst (1 microseconds, 0.08%)</title><a xlink:href="(eval 1112)[CGI-pm-932]-1222-line.html#CGI__CORE_subst" target="_top"><rect x="270.9" y="97" width="1.0" height="15.0" fill="rgb(237,145,35)" rx="2" ry="2" />
+<text text-anchor="" x="273.86" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::initialize_globals (21 microseconds, 1.73%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::initialize_globals (21 microseconds, 1.73%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__initialize_globals" target="_top"><rect x="274.6" y="129" width="20.7" height="15.0" fill="rgb(235,145,33)" rx="2" ry="2" />
+<text text-anchor="" x="277.56" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::self_or_default (2 microseconds, 0.16%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::self_or_default (2 microseconds, 0.16%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__self_or_default" target="_top"><rect x="271.9" y="97" width="1.7" height="15.0" fill="rgb(228,145,25)" rx="2" ry="2" />
+<text text-anchor="" x="274.93" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::reftype (3 microseconds, 0.25%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::reftype (3 microseconds, 0.25%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__reftype" target="_top"><rect x="948.3" y="65" width="3.2" height="15.0" fill="rgb(250,202,49)" rx="2" ry="2" />
+<text text-anchor="" x="951.32" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::search_rs (113 microseconds, 9.32%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::search_rs (113 microseconds, 9.32%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#429" target="_top"><rect x="470.0" y="113" width="110.4" height="15.0" fill="rgb(234,162,32)" rx="2" ry="2" />
+<text text-anchor="" x="473.01" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBIx::Class::..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSource::result_class (13 microseconds, 1.07%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSource::result_class (13 microseconds, 1.07%)</title><a xlink:href="(eval 167)[Class-Accessor-Grouped-pm-764]-53-line.html#1" target="_top"><rect x="563.1" y="81" width="12.4" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="566.06" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('File::pushd::DESTROY (17 microseconds, 1.40%)')" onmouseout="c()" onclick="zoom(this)">
+<title>File::pushd::DESTROY (17 microseconds, 1.40%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#File__pushd__DESTROY" target="_top"><rect x="295.3" y="129" width="16.7" height="15.0" fill="rgb(230,199,27)" rx="2" ry="2" />
+<text text-anchor="" x="298.29" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::result_class (12 microseconds, 0.99%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::result_class (12 microseconds, 0.99%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#1553" target="_top"><rect x="550.9" y="81" width="12.2" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="553.89" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::Schema::source (54 microseconds, 4.45%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::Schema::source (54 microseconds, 4.45%)</title><a xlink:href="DBIx-Class-Schema-pm-22-line.html#583" target="_top"><rect x="898.8" y="113" width="52.7" height="15.0" fill="rgb(249,162,48)" rx="2" ry="2" />
+<text text-anchor="" x="901.77" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBIx:..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::reftype (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::reftype (1 microseconds, 0.08%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__reftype" target="_top"><rect x="737.3" y="33" width="0.7" height="15.0" fill="rgb(250,202,49)" rx="2" ry="2" />
+<text text-anchor="" x="740.29" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::get_cache (5 microseconds, 0.41%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::get_cache (5 microseconds, 0.41%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#3126" target="_top"><rect x="715.5" y="65" width="4.5" height="15.0" fill="rgb(245,162,44)" rx="2" ry="2" />
+<text text-anchor="" x="718.49" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::Util::rearrange (21 microseconds, 1.73%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::Util::rearrange (21 microseconds, 1.73%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__Util__rearrange" target="_top"><rect x="1150.8" y="113" width="20.3" height="15.0" fill="rgb(247,145,46)" rx="2" ry="2" />
+<text text-anchor="" x="1153.77" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::param (10 microseconds, 0.82%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::param (10 microseconds, 0.82%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__param" target="_top"><rect x="1171.1" y="113" width="9.9" height="15.0" fill="rgb(225,145,22)" rx="2" ry="2" />
+<text text-anchor="" x="1174.12" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::AccessorGroup::get_component_class (10 microseconds, 0.82%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::AccessorGroup::get_component_class (10 microseconds, 0.82%)</title><a xlink:href="DBIx-Class-AccessorGroup-pm-46-line.html#12" target="_top"><rect x="565.5" y="65" width="10.0" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="568.49" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('mro::get_linear_isa (4 microseconds, 0.33%)')" onmouseout="c()" onclick="zoom(this)">
+<title>mro::get_linear_isa (4 microseconds, 0.33%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#mro__get_linear_isa" target="_top"><rect x="893.0" y="33" width="4.1" height="15.0" fill="rgb(231,128,28)" rx="2" ry="2" />
+<text text-anchor="" x="896.03" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::cache (10 microseconds, 0.82%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::cache (10 microseconds, 0.82%)</title><a xlink:href="(eval 1112)[CGI-pm-932]-1222-line.html#1" target="_top"><rect x="244.2" y="113" width="9.3" height="15.0" fill="rgb(245,145,44)" rx="2" ry="2" />
+<text text-anchor="" x="247.19" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('List::Util::first (3 microseconds, 0.25%)')" onmouseout="c()" onclick="zoom(this)">
+<title>List::Util::first (3 microseconds, 0.25%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#List__Util__first" target="_top"><rect x="577.9" y="97" width="2.5" height="15.0" fill="rgb(234,129,32)" rx="2" ry="2" />
+<text text-anchor="" x="580.86" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('all (1,212 microseconds, 100%)')" onmouseout="c()" onclick="zoom(this)">
+<title>all (1,212 microseconds, 100%)</title><rect x="10.0" y="145" width="1180.0" height="15.0" fill="rgb(255,230,55)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s('Class::Accessor::Grouped::get_inherited (6 microseconds, 0.49%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::Accessor::Grouped::get_inherited (6 microseconds, 0.49%)</title><a xlink:href="Class-Accessor-Grouped-pm-47-line.html#362" target="_top"><rect x="769.0" y="65" width="6.0" height="15.0" fill="rgb(247,125,46)" rx="2" ry="2" />
+<text text-anchor="" x="772.02" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::self_or_default (2 microseconds, 0.16%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::self_or_default (2 microseconds, 0.16%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__self_or_default" target="_top"><rect x="257.0" y="113" width="1.5" height="15.0" fill="rgb(228,145,25)" rx="2" ry="2" />
+<text text-anchor="" x="260.04" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::self_or_default (3 microseconds, 0.25%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::self_or_default (3 microseconds, 0.25%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__self_or_default" target="_top"><rect x="1181.0" y="113" width="3.4" height="15.0" fill="rgb(228,145,25)" rx="2" ry="2" />
+<text text-anchor="" x="1184.05" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::header (245 microseconds, 20.21%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::header (245 microseconds, 20.21%)</title><a xlink:href="(eval 1110)[CGI-pm-932]-1220-line.html#1" target="_top"><rect x="35.9" y="129" width="238.7" height="15.0" fill="rgb(243,145,41)" rx="2" ry="2" />
+<text text-anchor="" x="38.89" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >CGI::header</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Plack::Component::to_app_auto (28 microseconds, 2.31%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Plack::Component::to_app_auto (28 microseconds, 2.31%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Plack__Component__to_app_auto" target="_top"><rect x="951.5" y="129" width="27.8" height="15.0" fill="rgb(240,181,38)" rx="2" ry="2" />
+<text text-anchor="" x="954.53" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >P..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Class::Accessor::Grouped::get_inherited (6 microseconds, 0.49%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::Accessor::Grouped::get_inherited (6 microseconds, 0.49%)</title><a xlink:href="Class-Accessor-Grouped-pm-47-line.html#362" target="_top"><rect x="732.0" y="49" width="6.0" height="15.0" fill="rgb(247,125,46)" rx="2" ry="2" />
+<text text-anchor="" x="735.04" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('UNIVERSAL::isa (2 microseconds, 0.16%)')" onmouseout="c()" onclick="zoom(this)">
+<title>UNIVERSAL::isa (2 microseconds, 0.16%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#UNIVERSAL__isa" target="_top"><rect x="575.5" y="81" width="2.4" height="15.0" fill="rgb(231,181,28)" rx="2" ry="2" />
+<text text-anchor="" x="578.52" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:print (9 microseconds, 0.74%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:print (9 microseconds, 0.74%)</title><a xlink:href="plack-pl-9-line.html#CGI__Compile__ROOT__home_vagrant_kohaclone_plack_2epl__CORE_print" target="_top"><rect x="25.2" y="129" width="8.6" height="15.0" fill="rgb(238,145,36)" rx="2" ry="2" />
+<text text-anchor="" x="28.18" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::new (132 microseconds, 10.89%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::new (132 microseconds, 10.89%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#301" target="_top"><rect x="615.6" y="97" width="128.9" height="15.0" fill="rgb(235,162,33)" rx="2" ry="2" />
+<text text-anchor="" x="618.62" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBIx::Class::Res..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::CORE:match (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::CORE:match (1 microseconds, 0.08%)</title><a xlink:href="(eval 1112)[CGI-pm-932]-1222-line.html#CGI__CORE_match" target="_top"><rect x="270.3" y="97" width="0.6" height="15.0" fill="rgb(242,145,41)" rx="2" ry="2" />
+<text text-anchor="" x="273.28" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('File::pushd::pushd (67 microseconds, 5.53%)')" onmouseout="c()" onclick="zoom(this)">
+<title>File::pushd::pushd (67 microseconds, 5.53%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#File__pushd__pushd" target="_top"><rect x="312.0" y="129" width="65.3" height="15.0" fill="rgb(244,199,43)" rx="2" ry="2" />
+<text text-anchor="" x="315.03" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >File::p..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::self_or_default (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::self_or_default (1 microseconds, 0.08%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__self_or_default" target="_top"><rect x="252.3" y="97" width="1.2" height="15.0" fill="rgb(228,145,25)" rx="2" ry="2" />
+<text text-anchor="" x="255.27" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::CORE:regcomp (8 microseconds, 0.66%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::CORE:regcomp (8 microseconds, 0.66%)</title><a xlink:href="(eval 1112)[CGI-pm-932]-1222-line.html#CGI__CORE_regcomp" target="_top"><rect x="149.0" y="113" width="8.1" height="15.0" fill="rgb(238,145,36)" rx="2" ry="2" />
+<text text-anchor="" x="152.00" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Class::C3::Componentised::ensure_class_loaded (16 microseconds, 1.32%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::C3::Componentised::ensure_class_loaded (16 microseconds, 1.32%)</title><a xlink:href="Class-C3-Componentised-pm-42-line.html#130" target="_top"><rect x="699.5" y="65" width="16.0" height="15.0" fill="rgb(250,125,49)" rx="2" ry="2" />
+<text text-anchor="" x="702.53" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Plack::Sandbox::_2fetc_2fkoha_2fsites_2fkohadev_2fplack_2epsgi::__ANON__ (211 microseconds, 17.40%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Plack::Sandbox::_2fetc_2fkoha_2fsites_2fkohadev_2fplack_2epsgi::__ANON__ (211 microseconds, 17.40%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Plack__Sandbox___2fetc_2fkoha_2fsites_2fkohadev_2fplack_2epsgi____ANON__" target="_top"><rect x="979.3" y="129" width="205.1" height="15.0" fill="rgb(234,181,32)" rx="2" ry="2" />
+<text text-anchor="" x="982.27" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Plack::Sandbox::_2fetc_2fk..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::CORE:match (12 microseconds, 0.99%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::CORE:match (12 microseconds, 0.99%)</title><a xlink:href="(eval 1112)[CGI-pm-932]-1222-line.html#CGI__CORE_match" target="_top"><rect x="136.8" y="113" width="12.2" height="15.0" fill="rgb(242,145,41)" rx="2" ry="2" />
+<text text-anchor="" x="139.83" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Try::Tiny::try (126 microseconds, 10.39%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Try::Tiny::try (126 microseconds, 10.39%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Try__Tiny__try" target="_top"><rect x="775.9" y="97" width="122.9" height="15.0" fill="rgb(243,174,42)" rx="2" ry="2" />
+<text text-anchor="" x="778.93" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Try::Tiny::try</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Koha::Objects::search (590 microseconds, 48.67%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Koha::Objects::search (590 microseconds, 48.67%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Koha__Objects__search" target="_top"><rect x="377.3" y="129" width="574.2" height="15.0" fill="rgb(243,159,42)" rx="2" ry="2" />
+<text text-anchor="" x="380.34" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >Koha::Objects::search</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:unpack (2 microseconds, 0.16%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:unpack (2 microseconds, 0.16%)</title><a xlink:href="plack-pl-9-line.html#CGI__Compile__ROOT__home_vagrant_kohaclone_plack_2epl__CORE_unpack" target="_top"><rect x="33.8" y="129" width="2.1" height="15.0" fill="rgb(242,145,40)" rx="2" ry="2" />
+<text text-anchor="" x="36.85" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::get_cache (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::get_cache (1 microseconds, 0.08%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#3126" target="_top"><rect x="562.3" y="65" width="0.8" height="15.0" fill="rgb(245,162,44)" rx="2" ry="2" />
+<text text-anchor="" x="565.28" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::_normalize_selection (21 microseconds, 1.73%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::_normalize_selection (21 microseconds, 1.73%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#556" target="_top"><rect x="658.5" y="81" width="20.7" height="15.0" fill="rgb(247,162,46)" rx="2" ry="2" />
+<text text-anchor="" x="661.55" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::_normalize_selection (10 microseconds, 0.82%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::_normalize_selection (10 microseconds, 0.82%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#556" target="_top"><rect x="540.7" y="81" width="10.2" height="15.0" fill="rgb(247,162,46)" rx="2" ry="2" />
+<text text-anchor="" x="543.67" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Class::C3::Componentised::ensure_class_loaded (4 microseconds, 0.33%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::C3::Componentised::ensure_class_loaded (4 microseconds, 0.33%)</title><a xlink:href="Class-C3-Componentised-pm-42-line.html#130" target="_top"><rect x="558.7" y="65" width="3.6" height="15.0" fill="rgb(250,125,49)" rx="2" ry="2" />
+<text text-anchor="" x="561.68" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Class::Accessor::Grouped::get_inherited (4 microseconds, 0.33%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Class::Accessor::Grouped::get_inherited (4 microseconds, 0.33%)</title><a xlink:href="Class-Accessor-Grouped-pm-47-line.html#362" target="_top"><rect x="570.8" y="49" width="4.3" height="15.0" fill="rgb(247,125,46)" rx="2" ry="2" />
+<text text-anchor="" x="573.85" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::blessed (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::blessed (1 microseconds, 0.08%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__blessed" target="_top"><rect x="775.0" y="65" width="0.9" height="15.0" fill="rgb(247,202,47)" rx="2" ry="2" />
+<text text-anchor="" x="777.96" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::Util::rearrange (78 microseconds, 6.43%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::Util::rearrange (78 microseconds, 6.43%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__Util__rearrange" target="_top"><rect x="168.1" y="113" width="76.1" height="15.0" fill="rgb(247,145,46)" rx="2" ry="2" />
+<text text-anchor="" x="171.07" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >CGI::Uti..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:open (10 microseconds, 0.82%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::Compile::ROOT::home_vagrant_kohaclone_plack_2epl::CORE:open (10 microseconds, 0.82%)</title><a xlink:href="plack-pl-9-line.html#CGI__Compile__ROOT__home_vagrant_kohaclone_plack_2epl__CORE_open" target="_top"><rect x="10.0" y="129" width="9.7" height="15.0" fill="rgb(250,145,49)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::new (56 microseconds, 4.62%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::new (56 microseconds, 4.62%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#301" target="_top"><rect x="523.6" y="97" width="54.3" height="15.0" fill="rgb(235,162,33)" rx="2" ry="2" />
+<text text-anchor="" x="526.64" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBIx:..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::reftype (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::reftype (1 microseconds, 0.08%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__reftype" target="_top"><rect x="574.5" y="33" width="0.6" height="15.0" fill="rgb(250,202,49)" rx="2" ry="2" />
+<text text-anchor="" x="577.55" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSource::resultset (327 microseconds, 26.97%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSource::resultset (327 microseconds, 26.97%)</title><a xlink:href="DBIx-Class-ResultSource-pm-87-line.html#1118" target="_top"><rect x="580.4" y="113" width="318.4" height="15.0" fill="rgb(237,162,35)" rx="2" ry="2" />
+<text text-anchor="" x="583.39" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBIx::Class::ResultSource::resultset</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::charset (4 microseconds, 0.33%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::charset (4 microseconds, 0.33%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#CGI__charset" target="_top"><rect x="253.5" y="113" width="3.5" height="15.0" fill="rgb(237,145,35)" rx="2" ry="2" />
+<text text-anchor="" x="256.53" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('UNIVERSAL::isa (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>UNIVERSAL::isa (1 microseconds, 0.08%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#UNIVERSAL__isa" target="_top"><rect x="273.6" y="113" width="1.0" height="15.0" fill="rgb(231,181,28)" rx="2" ry="2" />
+<text text-anchor="" x="276.58" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('CGI::CORE:subst (8 microseconds, 0.66%)')" onmouseout="c()" onclick="zoom(this)">
+<title>CGI::CORE:subst (8 microseconds, 0.66%)</title><a xlink:href="(eval 1112)[CGI-pm-932]-1222-line.html#CGI__CORE_subst" target="_top"><rect x="157.1" y="113" width="7.5" height="15.0" fill="rgb(237,145,35)" rx="2" ry="2" />
+<text text-anchor="" x="160.07" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSource::resultset_class (32 microseconds, 2.64%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSource::resultset_class (32 microseconds, 2.64%)</title><a xlink:href="(eval 167)[Class-Accessor-Grouped-pm-764]-53-line.html#1" target="_top"><rect x="744.5" y="97" width="31.4" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="747.49" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DB..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::blessed (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::blessed (1 microseconds, 0.08%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__blessed" target="_top"><rect x="738.0" y="49" width="0.6" height="15.0" fill="rgb(247,202,47)" rx="2" ry="2" />
+<text text-anchor="" x="740.97" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('DBIx::Class::ResultSet::result_class (42 microseconds, 3.46%)')" onmouseout="c()" onclick="zoom(this)">
+<title>DBIx::Class::ResultSet::result_class (42 microseconds, 3.46%)</title><a xlink:href="DBIx-Class-ResultSet-pm-85-line.html#1553" target="_top"><rect x="679.2" y="81" width="40.8" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text text-anchor="" x="682.18" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >DBI..</text>
+</a>
+</g>
+<g class="func_g" onmouseover="s('Scalar::Util::reftype (1 microseconds, 0.08%)')" onmouseout="c()" onclick="zoom(this)">
+<title>Scalar::Util::reftype (1 microseconds, 0.08%)</title><a xlink:href="(eval 161)[Text-MicroTemplate-pm-389]-1-line.html#Scalar__Util__reftype" target="_top"><rect x="774.3" y="49" width="0.7" height="15.0" fill="rgb(250,202,49)" rx="2" ry="2" />
+<text text-anchor="" x="777.28" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</a>
+</g>
+</svg>
