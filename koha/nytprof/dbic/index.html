@@ -75,8 +75,6 @@ print "&lt;html&gt;&lt;body&gt;Hello&lt;/body&gt;&lt;/html&gt;";
 
 <p>The <a href="nytprofhtml.19366/index.html">profile</a> highlights that the time spent to load the schema is always the same (1.3s).</p>
 
-<p>But a lot of time is spent fetching the same result, is it normal (TODO).</p>
-
 <h3>Fetching a lot of libraries, without Koha::Objects</h3>
 
 <p>Is there an issue in Koha::Objects here?</p>
@@ -107,6 +105,15 @@ print "&lt;html&gt;&lt;body&gt;Hello&lt;/body&gt;&lt;/html&gt;";
 <p>The <a href="nytprofhtml.19609">profile</a> proves that the Koha::Objects does not add a big overhead here.</p>
 
 <p>At least for -&gt;find.</p>
+
+<p>But a lot of time is spent fetching the same result, is it normal?</p>
+
+<p>Update: I have configured mysql to log all queries in a log file. And the queries don't seem to be cached, there are 3000 queries of this kind:</p>
+
+<pre><code>SELECT me.branchcode, me.branchname, me.branchaddress1, me.branchaddress2, me.branchaddress3, me.branchzip, me.branchcity, me.branchstate, me.branchcountry, me.branchphone, me.branchfax, me.branchemail, me.branchreplyto, me.branchreturnpath, me.branchurl, me.issuing, me.branchip, me.branchprinter, me.branchnotes, me.opac_info
+FROM branches me
+WHERE ( me.branchcode = 'MPL' )
+</code></pre>
 
 <h3>What about the -&gt;search method?</h3>
 

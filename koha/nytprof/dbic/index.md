@@ -72,8 +72,6 @@ The following script will fetch 3x 1000 libraries
 
 The [profile](nytprofhtml.19366/index.html) highlights that the time spent to load the schema is always the same (1.3s).
 
-But a lot of time is spent fetching the same result, is it normal (TODO).
-
 ### Fetching a lot of libraries, without Koha::Objects
 
 Is there an issue in Koha::Objects here?
@@ -103,6 +101,14 @@ The following script does the same as before, but without using the Koha::Librar
 The [profile](nytprofhtml.19609) proves that the Koha::Objects does not add a big overhead here.
 
 At least for ->find.
+
+But a lot of time is spent fetching the same result, is it normal?
+
+Update: I have configured mysql to log all queries in a log file. And the queries don't seem to be cached, there are 3000 queries of this kind:
+
+    SELECT me.branchcode, me.branchname, me.branchaddress1, me.branchaddress2, me.branchaddress3, me.branchzip, me.branchcity, me.branchstate, me.branchcountry, me.branchphone, me.branchfax, me.branchemail, me.branchreplyto, me.branchreturnpath, me.branchurl, me.issuing, me.branchip, me.branchprinter, me.branchnotes, me.opac_info
+    FROM branches me
+    WHERE ( me.branchcode = 'MPL' )
 
 ### What about the ->search method?
 
